@@ -553,9 +553,6 @@
                                     <label for="teamPosition">Posisi<span class="required-mark">*</span></label>
                                     <select class="input-field" id="teamPosition">
                                         <option value="">Pilih Posisi</option>
-                                        <option value="Branding/Social Media Specialist">Branding/Social Media Specialist</option>
-                                        <option value="Admin Marketing">Admin Marketing</option>
-                                        <option value="Client & Product/Admin Kelas">Client & Product/Admin Kelas</option>
                                     </select>
                                     <p class="helper-text" id="teamPositionHelp" data-default="Pilih posisi yang Anda lamar.">Pilih posisi yang Anda lamar.</p>
                                 </div>
@@ -573,6 +570,20 @@
                                     <label for="teamDomicile">Domisili<span class="required-mark">*</span></label>
                                     <input type="text" class="input-field" id="teamDomicile" placeholder="Contoh: Yogyakarta">
                                     <p class="helper-text" id="teamDomicileHelp" data-default="Tulis kota/kabupaten domisili Anda saat ini.">Tulis kota/kabupaten domisili Anda saat ini.</p>
+                                </div>
+                                <div class="md:col-span-2">
+                                    <label>Mode Kerja<span class="required-mark">*</span></label>
+                                    <div class="mode-options">
+                                        <div class="consent-wrap mt-0">
+                                            <input type="checkbox" id="teamModeWfo" checked>
+                                            <label for="teamModeWfo" class="consent-text !mb-0">Saya bisa Work From Office (WFO).</label>
+                                        </div>
+                                        <div class="consent-wrap mt-0" id="teamModeWfhWrapper">
+                                            <input type="checkbox" id="teamModeWfh">
+                                            <label for="teamModeWfh" class="consent-text !mb-0">Saya bisa Work From Home (WFH).</label>
+                                        </div>
+                                    </div>
+                                    <p id="teamModeWfhNote" class="helper-text" data-default="WFH hanya tersedia untuk posisi tertentu.">WFH hanya tersedia untuk posisi tertentu.</p>
                                 </div>
                             </div>
                         </div>
@@ -685,7 +696,12 @@
             getFirestore,
             collection,
             addDoc,
-            serverTimestamp
+            serverTimestamp,
+            getDocs,
+            query,
+            where,
+            orderBy,
+            onSnapshot
         } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
         import {
             getStorage,
@@ -727,9 +743,134 @@
         window.uploadBytes = uploadBytes;
         window.getDownloadURL = getDownloadURL;
         window.uploadFileToStorage = uploadFileToStorage;
+
+        // Fetch team positions from Firestore and populate dropdowns in real-time
+        window.loadPositions = function() {
+            const q = query(
+                collection(db, "recruitment_positions"),
+                where("category", "array-contains", "team")
+            );
+
+            onSnapshot(q, (snapshot) => {
+                const positions = snapshot.docs.map(ds => ({ id: ds.id, ...ds.data() }));
+                // Sort positions in memory by sort_order
+                positions.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+                window.recruitmentPositions = positions;
+                window.recruitmentPositionsLoaded = true;
+
+                const selectEl = document.getElementById("teamPosition");
+                if (selectEl) {
+                    const previousVal = selectEl.value;
+                    selectEl.innerHTML = '<option value="">Pilih Posisi</option>';
+                    positions.forEach(p => {
+                        const opt = document.createElement("option");
+                        opt.value = p.id;
+                        if (p.is_active === false) {
+                            opt.textContent = p.name + " (Closed)";
+                            opt.disabled = true;
+                            opt.classList.add("text-slate-400");
+                        } else {
+                            opt.textContent = p.name;
+                        }
+                        selectEl.appendChild(opt);
+                    });
+
+                    // Restore previous value only if it exists and is active
+                    if (previousVal && positions.some(p => p.id === previousVal && p.is_active !== false)) {
+                        selectEl.value = previousVal;
+                    } else {
+                        selectEl.value = "";
+                    }
+                }
+
+                // Trigger update of WFH availability when positions change
+                if (typeof window.updateWfhAvailability === "function") {
+                    window.updateWfhAvailability();
+                }
+            }, (error) => {
+                console.error("Failed to load positions from Firestore", error);
+            });
+        };
+        window.loadPositions();
     </script>
 
     <script>
+        window.updateWfhAvailability = function() {
+            const positionSelect = document.getElementById("teamPosition");
+            const wfhCheckbox = document.getElementById("teamModeWfh");
+            const wfhWrapper = document.getElementById("teamModeWfhWrapper");
+            const note = document.getElementById("teamModeWfhNote");
+            
+            if (!wfhCheckbox) return;
+
+            const selectedId = positionSelect ? positionSelect.value : "";
+            const positions = window.recruitmentPositions || [];
+            const selectedPosition = positions.find(p => p.id === selectedId);
+
+            const isEligible = selectedPosition ? !!selectedPosition.wfh_eligible : false;
+
+            wfhCheckbox.disabled = !isEligible;
+            if (!isEligible) {
+                wfhCheckbox.checked = false;
+            }
+
+            if (isEligible) {
+                if (wfhWrapper) {
+                    wfhWrapper.style.display = ""; // Show WFH option
+                }
+                if (note) {
+                    note.textContent = "Posisi ini bisa memilih WFO atau WFH.";
+                }
+            } else {
+                if (wfhWrapper) {
+                    wfhWrapper.style.display = "none"; // Hide WFH option
+                }
+                if (note) {
+                    note.textContent = "WFH tidak tersedia untuk posisi ini.";
+                }
+            }
+        };
+
+        function updateWfhAvailability() {
+            if (typeof window.updateWfhAvailability === "function") {
+                window.updateWfhAvailability();
+            }
+        }
+
+        const wfoCheckbox = document.getElementById("teamModeWfo");
+        const wfhCheckbox = document.getElementById("teamModeWfh");
+        
+        function enforceSingleWorkMode(changed) {
+            if (!wfoCheckbox || !wfhCheckbox) return;
+            if (changed === "wfo" && wfoCheckbox.checked) {
+                wfhCheckbox.checked = false;
+            }
+            if (changed === "wfh" && wfhCheckbox.checked) {
+                wfoCheckbox.checked = false;
+            }
+        }
+
+        if (wfoCheckbox) {
+            wfoCheckbox.addEventListener("change", () => enforceSingleWorkMode("wfo"));
+        }
+        if (wfhCheckbox) {
+            wfhCheckbox.addEventListener("change", () => enforceSingleWorkMode("wfh"));
+        }
+
+        function initWfhAfterPositions() {
+            if (window.recruitmentPositionsLoaded) { updateWfhAvailability(); return; }
+            let attempts = 0;
+            const waiter = setInterval(() => {
+                attempts++;
+                if (window.recruitmentPositionsLoaded || attempts > 50) {
+                    clearInterval(waiter);
+                    updateWfhAvailability();
+                }
+            }, 100);
+        }
+        initWfhAfterPositions();
+
         let currentStep = 0;
         const steps = document.querySelectorAll(".form-step");
         const stepIcons = document.querySelectorAll(".step-item");
@@ -1246,6 +1387,14 @@
             el.addEventListener("change", clear);
         });
 
+        const teamPositionField = document.getElementById("teamPosition");
+        if (teamPositionField) {
+            teamPositionField.addEventListener("change", () => {
+                updateWfhAvailability();
+                setFormErrorMessage("");
+            });
+        }
+
         ['[id^="mentorDay"]'].forEach(selector => {
             document.querySelectorAll(selector).forEach(el => {
                 el.addEventListener("change", () => {
@@ -1331,6 +1480,11 @@
 
             const fullName = fullNameInput ? (fullNameInput.value || "").trim() : "";
             const position = positionInput ? (positionInput.value || "").trim() : "";
+            const selectedPosition = (window.recruitmentPositions || []).find(p => p.id === position);
+            let positionName = selectedPosition ? selectedPosition.name : "";
+            if (!positionName && positionInput && positionInput.selectedIndex > -1) {
+                positionName = (positionInput.options[positionInput.selectedIndex].text || "").replace(" (Closed)", "");
+            }
             const domicile = domicileInput ? (domicileInput.value || "").trim() : "";
             const about = aboutInput ? (aboutInput.value || "").trim() : "";
             const portofolioLink = portfolioLinkInput ? (portfolioLinkInput.value || "").trim() : null;
@@ -1341,7 +1495,7 @@
             const payload = {
                 basic_info: {
                     full_name: fullName,
-                    current_role: position,
+                    current_role: positionName || position,
                     avatar_url: null
                 },
                 contact_info: {
@@ -1360,10 +1514,16 @@
                     portfolio_link: portofolioLink,
                     consent: !!(document.getElementById("teamConsent") && document.getElementById("teamConsent").checked),
                     role_id: ROLE_ID,
-                    role_name: position
+                    role_name: positionName || position,
+                    position_id: position || null,
+                    position_name: positionName || position,
+                    position_category: "team"
                 },
                 role_id: ROLE_ID,
-                role_name: position,
+                role_name: positionName || position,
+                position_id: position || null,
+                position_name: positionName || position,
+                position_category: "team",
                 recruitment_status: {
                     current: "screening",
                     history: [
